@@ -17,6 +17,8 @@
     ],
     "require": {
         "php": "^8.2",
+        "ext-simplexml": "*",
+        "nesbot/carbon": "^3.8",
         "sabre/dav": "^4.6"
     },
     "require-dev": {

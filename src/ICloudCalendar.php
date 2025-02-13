@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Zaptime\ICloudCalendar;
 
+use Carbon\Carbon;
 use DateTime;
 use Sabre\DAV\Client;
 use Zaptime\ICloudCalendar\Exceptions\EventCreationFailed;
@@ -122,5 +123,105 @@ class ICloudCalendar
 
         return $calendars;
     }
+
+    public function getEvents(string $calendarUrl, Carbon $startDate, Carbon $endDate): array
+    {
+        $client = $this->getClient();
+        $xmlRequest = '<?xml version="1.0" encoding="UTF-8"?>
+        <c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">
+            <d:prop>
+                <d:getetag/>
+                <c:calendar-data/>
+            </d:prop>
+            <c:filter>
+                <c:comp-filter name="VCALENDAR">
+                    <c:comp-filter name="VEVENT">
+                        <c:time-range start="' . $startDate->format('Ymd\THis\Z') . '" end="' . $endDate->format('Ymd\THis\Z') . '"/>
+                    </c:comp-filter>
+                </c:comp-filter>
+            </c:filter>
+        </c:calendar-query>';
+
+        $response = $client->request('REPORT', $calendarUrl, $xmlRequest, [
+            'Depth' => '1',
+            'Content-Type' => 'application/xml; charset=utf-8',
+        ]);
+
+        if ($response['statusCode'] < 200 || $response['statusCode'] >= 300) {
+            throw new \RuntimeException('Failed to fetch events');
+        }
+
+        return $this->parseICloudEvents($response);
+    }
+
+    private function parseICloudEvents(array $response): array
+    {
+        $events = [];
+
+        // Load XML response body
+        $xml = new \SimpleXMLElement($response['body']);
+
+        // Register the namespace for DAV and CalDAV
+        $xml->registerXPathNamespace('d', 'DAV:');
+        $xml->registerXPathNamespace('c', 'urn:ietf:params:xml:ns:caldav');
+
+        // Extract all calendar-data elements
+        foreach ($xml->xpath('//c:calendar-data') as $calendarData) {
+            $icalData = (string) $calendarData;
+
+            // Parse the iCalendar data
+            $parsedEvents = $this->parseICalData($icalData);
+            $events = array_merge($events, $parsedEvents);
+        }
+
+        return $events;
+    }
+
+    private function parseICalData(string $icalData): array
+    {
+        $events = [];
+        $lines = explode("\n", $icalData);
+        $event = [];
+        $insideEvent = false;
+        $timezone = null;
+
+        foreach ($lines as $line) {
+            $line = trim($line);
+
+            if ($line === 'BEGIN:VEVENT') {
+                $insideEvent = true;
+                $event = [];
+            } elseif ($line === 'END:VEVENT') {
+                $insideEvent = false;
+                $events[] = $event;
+            } elseif ($insideEvent) {
+                if (strpos($line, ':') !== false) {
+                    [$key, $value] = explode(':', $line, 2);
+
+                    // Handle timezones (TZID in DTSTART/DTEND)
+                    if (strpos($key, ';TZID=') !== false) {
+                        preg_match('/TZID=([^:]+):(.+)/', $line, $matches);
+                        if (!empty($matches[1]) && !empty($matches[2])) {
+                            $key = str_replace(';TZID='.$matches[1], '', $key);
+                            $event['timezone'] = $matches[1];
+                            $value = $matches[2];
+                        }
+                    }
+
+                    // Convert date formats
+                    if ($key === 'DTSTART' || $key === 'DTEND') {
+                        $event[$key] = Carbon::createFromFormat('Ymd\THis', $value, $event['timezone'] ?? 'UTC');
+                    } elseif ($key === 'DTEND;VALUE=DATE' || $key === 'DTSTART;VALUE=DATE') {
+                        $event[str_replace(';VALUE=DATE', '', $key)] = Carbon::createFromFormat('Ymd', $value, $event['timezone'] ?? 'UTC')->startOfDay();
+                    } else {
+                        $event[strtolower($key)] = $value;
+                    }
+                }
+            }
+        }
+
+        return $events;
+    }
+
 
 }
