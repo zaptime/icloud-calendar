@@ -210,7 +210,13 @@ class ICloudCalendar
 
                     // Convert date formats
                     if ($key === 'DTSTART' || $key === 'DTEND') {
-                        $event[$key] = Carbon::createFromFormat('Ymd\THis', $value, $event['timezone'] ?? 'UTC');
+                        if (str_ends_with($value, 'Z')) {
+                            // The date is in UTC, explicitly set the timezone
+                            $event[$key] = Carbon::createFromFormat('Ymd\THis\Z', $value)->setTimezone('UTC');
+                        } else {
+                            // Handle cases where timezone might be provided separately
+                            $event[$key] = Carbon::createFromFormat('Ymd\THis', $value, $event['timezone'] ?? 'UTC');
+                        }
                     } elseif ($key === 'DTEND;VALUE=DATE' || $key === 'DTSTART;VALUE=DATE') {
                         $event[str_replace(';VALUE=DATE', '', $key)] = Carbon::createFromFormat('Ymd', $value, $event['timezone'] ?? 'UTC')->startOfDay();
                     } else {
@@ -222,6 +228,5 @@ class ICloudCalendar
 
         return $events;
     }
-
 
 }
